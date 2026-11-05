@@ -18,6 +18,7 @@ from .schemas import (
     PasteMessageRequest,
     AIExtractionResult,
 )
+from .sample_data import SAMPLE_ENQUIRIES
 from .ai_service import (
     process_message_with_ai,
     generate_weekly_summary,
@@ -212,10 +213,8 @@ def delete_enquiry(enquiry_id: int, db: Session = Depends(get_db)):
 # ----------------- Sample Data Seeding & Reset -----------------
 
 @app.post("/api/enquiries/seed-sample")
-def seed_sample_data(enrich_ai: bool = True, db: Session = Depends(get_db)):
-    """Seeds the 20 enquiries from the task CSV with AI classification."""
-    csv_path = os.path.join(os.path.dirname(__file__), "../sample-enquiries.csv")
-
+def seed_sample_data(db: Session = Depends(get_db)):
+    """Seeds the 20 enquiries from the task dataset if table is empty."""
     existing_count = db.query(Enquiry).count()
     if existing_count > 0:
         return {
@@ -223,57 +222,26 @@ def seed_sample_data(enrich_ai: bool = True, db: Session = Depends(get_db)):
             "count": existing_count
         }
 
-    seeded_enquiries = []
-    with open(csv_path, mode="r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            msg = row.get("message", "")
-            channel = row.get("channel", "WhatsApp")
-            name = row.get("sender name", "Unknown")
-            phone = row.get("phone") or None
-
-            # Enrich with AI during seed if requested
-            category = "General Inquiry"
-            lang = "English"
-            priority = "Normal"
-            reply = ""
-            if enrich_ai:
-                ai_data = process_message_with_ai(
-                    raw_text=msg,
-                    channel=channel,
-                    existing_sender=name,
-                    existing_phone=phone or ""
-                )
-                category = ai_data.get("category", category)
-                lang = ai_data.get("detected_language", lang)
-                priority = ai_data.get("priority", priority)
-                reply = ai_data.get("suggested_reply", "")
-
-            enquiry = Enquiry(
-                original_id=int(row.get("id")) if row.get("id") else None,
-                channel=channel,
-                received_at=row.get("received at"),
-                sender_name=name,
-                phone=phone,
-                raw_message=msg,
-                category=category,
-                detected_language=lang,
-                priority=priority,
-                suggested_reply=reply,
-                status="New"
-            )
-            seeded_enquiries.append(enquiry)
-
+    seeded_enquiries = [Enquiry(**item) for item in SAMPLE_ENQUIRIES]
     db.add_all(seeded_enquiries)
     db.commit()
     return {
-        "message": f"Successfully loaded and AI-enriched {len(seeded_enquiries)} sample enquiries.",
+        "message": f"Successfully loaded {len(seeded_enquiries)} sample enquiries.",
         "count": len(seeded_enquiries)
     }
 
 @app.post("/api/enquiries/reset-data")
 def reset_enquiries(db: Session = Depends(get_db)):
-    """Clears and re-seeds the database for a fresh demo."""
-    db.query(Enquiry).delete()
-    db.commit()
-    return seed_sample_data(enrich_ai=True, db=db)
+    """Clears and re-seeds the database instantly for a fresh demo."""
+    try:
+        db.query(Enquiry).delete()
+        seeded_enquiries = [Enquiry(**item) for item in SAMPLE_ENQUIRIES]
+        db.add_all(seeded_enquiries)
+        db.commit()
+        return {
+            "message": f"Successfully reset and loaded {len(seeded_enquiries)} enquiries.",
+            "count": len(seeded_enquiries)
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database reset error: {str(e)}")
